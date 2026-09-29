@@ -1,0 +1,5 @@
+[seraphirc-bin]
+source = "github"
+github = "seraphirc/seraphirc-download"
+use_latest_release = true
+prefix = "v"
