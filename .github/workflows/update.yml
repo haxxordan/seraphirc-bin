@@ -93,20 +93,7 @@ jobs:
 
           actual_deps="$(dpkg-deb -f seraphirc.deb Depends             | tr ',' '\n'             | sed -E 's/^ +| +$//g; s/ +\([^)]*\)//g'             | sort -u)"
 
-          expected_deps="$(cat <<'EOF' | sort -u
-dbus-user-session
-desktop-file-utils
-gnome-keyring
-gstreamer1.0-libav
-gstreamer1.0-plugins-base
-gstreamer1.0-plugins-good
-hicolor-icon-theme
-libgtk-3-0
-libsecret-1-0
-libsecret-tools
-libwebkit2gtk-4.1-0
-EOF
-)"
+          expected_deps="$(printf '%s\\n' dbus-user-session desktop-file-utils gnome-keyring gstreamer1.0-libav gstreamer1.0-plugins-base gstreamer1.0-plugins-good hicolor-icon-theme libgtk-3-0 libsecret-1-0 libsecret-tools libwebkit2gtk-4.1-0 | sort -u)"
 
           if [[ "$actual_deps" != "$expected_deps" ]]; then
             echo "Upstream dependency set changed; refusing automatic publish." >&2
