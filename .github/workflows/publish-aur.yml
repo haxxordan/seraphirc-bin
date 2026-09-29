@@ -14,11 +14,14 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    concurrency:
+      group: aur-publish
+      cancel-in-progress: false
     env:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Require configured AUR key
         if: env.AUR_SSH_PRIVATE_KEY == ''
