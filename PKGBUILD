@@ -1,4 +1,4 @@
-# Maintainer: haxxordan <haxxordan@proton.me>
+# Maintainer: haxxordan
 
 pkgname=seraphirc-bin
 _pkgname=seraphirc
