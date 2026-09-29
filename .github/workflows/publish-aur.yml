@@ -1,0 +1,67 @@
+name: Publish to AUR
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'PKGBUILD'
+      - '.SRCINFO'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require configured AUR key
+        if: env.AUR_SSH_PRIVATE_KEY == ''
+        run: |
+          echo "AUR_SSH_PRIVATE_KEY is not configured; skipping publish."
+          exit 0
+
+      - name: Configure AUR SSH key
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur
+            User aur
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Publish package metadata
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          git clone ssh://aur@aur.archlinux.org/seraphirc-bin.git aur || {
+            echo "Could not clone the AUR repository."
+            echo "Make sure seraphirc-bin exists on the AUR and the CI public key is attached to your AUR account."
+            exit 1
+          }
+
+          cp PKGBUILD .SRCINFO aur/
+          cd aur
+
+          git config user.name "haxxordan"
+          git config user.email "haxxordan@proton.me"
+
+          if git diff --quiet -- PKGBUILD .SRCINFO; then
+            echo "AUR package is already current."
+            exit 0
+          fi
+
+          version="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+          git add PKGBUILD .SRCINFO
+          git commit -m "seraphirc-bin ${version}"
+          git push
