@@ -38,7 +38,7 @@ jobs:
             webkit2gtk-4.1
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Verify .SRCINFO is current
         run: |
