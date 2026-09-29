@@ -1,0 +1,125 @@
+name: Check upstream release
+
+on:
+  schedule:
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check latest SeraphIRC release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+          latest="$(gh api repos/seraphirc/seraphirc-download/releases/latest --jq '.tag_name' | sed 's/^v//')"
+
+          echo "current=$current"
+          echo "latest=$latest"
+
+          if [[ "$latest" == "$current" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+([._+-][A-Za-z0-9._+-]+)?$ ]]; then
+            echo "Unexpected upstream version format: $latest" >&2
+            exit 1
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Download and inspect new upstream package
+        if: steps.version.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          base="https://github.com/seraphirc/seraphirc-download/releases/download/v${VERSION}"
+          curl -fL --retry 3 -o seraphirc.deb "${base}/seraphirc_${VERSION}_amd64.deb"
+          curl -fL --retry 3 -o checksum.txt "${base}/seraphirc_${VERSION}_amd64.deb.sha256sum.txt"
+
+          upstream_sha="$(awk '{print $1}' checksum.txt)"
+          actual_sha="$(sha256sum seraphirc.deb | awk '{print $1}')"
+          [[ "$upstream_sha" == "$actual_sha" ]]
+
+          dpkg-deb --extract seraphirc.deb unpack
+          test -x unpack/usr/bin/seraphirc
+          test -f unpack/usr/share/applications/seraphirc.desktop
+          test -f unpack/usr/share/doc/seraphirc/LICENSE
+          test -f unpack/usr/share/seraphirc/config.default.json
+
+          deps="$(dpkg-deb -f seraphirc.deb Depends)"
+          for expected in \
+            libgtk-3-0 \
+            libwebkit2gtk-4.1-0 \
+            desktop-file-utils \
+            hicolor-icon-theme \
+            gnome-keyring \
+            libsecret-1-0 \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-libav
+          do
+            grep -qw "$expected" <<<"$deps" || {
+              echo "Expected upstream dependency disappeared: $expected" >&2
+              exit 1
+            }
+          done
+
+          echo "UPSTREAM_SHA=$upstream_sha" >> "$GITHUB_ENV"
+
+      - name: Update PKGBUILD and .SRCINFO
+        if: steps.version.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.latest }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+          sed -i 's/^pkgrel=.*/pkgrel=1/' PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('${UPSTREAM_SHA}')/" PKGBUILD
+
+          docker run --rm \
+            -v "$PWD:/pkg" \
+            -w /pkg \
+            archlinux:latest \
+            bash -lc "pacman -Sy --noconfirm base-devel >/dev/null && useradd -m builder && chown -R builder:builder /pkg && su builder -c 'makepkg --printsrcinfo > .SRCINFO'"
+
+      - name: Open update pull request
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.latest }}
+        run: |
+          set -euo pipefail
+          branch="automation/seraphirc-${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add PKGBUILD .SRCINFO
+          git commit -m "chore: update SeraphIRC to ${VERSION}"
+          git push --force-with-lease origin "$branch"
+
+          existing="$(gh pr list --head "$branch" --json number --jq '.[0].number // empty')"
+          if [[ -z "$existing" ]]; then
+            gh pr create \
+              --base master \
+              --head "$branch" \
+              --title "Update SeraphIRC to ${VERSION}" \
+              --body "Automated upstream release update. The Debian asset checksum, expected file layout, and declared runtime dependencies were verified before this PR was opened."
+          fi
