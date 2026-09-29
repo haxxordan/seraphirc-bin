@@ -54,7 +54,7 @@ jobs:
           cd aur
 
           git config user.name "haxxordan"
-          git config user.email "haxxordan@proton.me"
+          git config user.email "haxxordan@users.noreply.github.com"
 
           if git diff --quiet -- PKGBUILD .SRCINFO; then
             echo "AUR package is already current."
