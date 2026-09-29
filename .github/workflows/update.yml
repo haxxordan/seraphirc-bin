@@ -36,6 +36,9 @@ jobs:
           echo "current=$current"
           echo "latest=$latest"
 
+          # Prove the workflow token can update master before we ever need it.
+          git push --dry-run origin HEAD:master
+
           if [[ "$latest" == "$current" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
