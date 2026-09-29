@@ -4,17 +4,25 @@ on:
   schedule:
     - cron: '17 13 * * *'
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/update.yml'
 
 permissions:
   contents: write
-  pull-requests: write
+
+concurrency:
+  group: seraphirc-upstream-update
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check latest SeraphIRC release
         id: version
@@ -42,20 +50,40 @@ jobs:
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
 
+      - name: Require AUR publishing key
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          if [[ -z "$AUR_SSH_PRIVATE_KEY" ]]; then
+            echo "AUR_SSH_PRIVATE_KEY is not configured; refusing to update GitHub without being able to update AUR." >&2
+            exit 1
+          fi
+
       - name: Download and inspect new upstream package
         if: steps.version.outputs.changed == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.latest }}
         run: |
           set -euo pipefail
 
-          base="https://github.com/seraphirc/seraphirc-download/releases/download/v${VERSION}"
-          curl -fL --retry 3 -o seraphirc.deb "${base}/seraphirc_${VERSION}_amd64.deb"
-          curl -fL --retry 3 -o checksum.txt "${base}/seraphirc_${VERSION}_amd64.deb.sha256sum.txt"
+          base="https://github.com/seraphirc/seraphirc-download/releases/download/v$VERSION"
+          asset_name="seraphirc_$VERSION"_amd64.deb
+
+          curl -fL --retry 3 -o seraphirc.deb "$base/$asset_name"
+          curl -fL --retry 3 -o checksum.txt "$base/$asset_name.sha256sum.txt"
 
           upstream_sha="$(awk '{print $1}' checksum.txt)"
           actual_sha="$(sha256sum seraphirc.deb | awk '{print $1}')"
-          [[ "$upstream_sha" == "$actual_sha" ]]
+          [[ "$upstream_sha" == "$actual_sha" ]] || {
+            echo "Upstream checksum file does not match downloaded .deb" >&2
+            exit 1
+          }
+
+          github_digest="$(gh api "repos/seraphirc/seraphirc-download/releases/tags/v$VERSION"             | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest'             | sed 's/^sha256://')"
+          [[ -n "$github_digest" && "$github_digest" != "null" && "$github_digest" == "$actual_sha" ]] || {
+            echo "GitHub release asset digest does not match downloaded .deb" >&2
+            exit 1
+          }
 
           dpkg-deb --extract seraphirc.deb unpack
           test -x unpack/usr/bin/seraphirc
@@ -63,23 +91,31 @@ jobs:
           test -f unpack/usr/share/doc/seraphirc/LICENSE
           test -f unpack/usr/share/seraphirc/config.default.json
 
-          deps="$(dpkg-deb -f seraphirc.deb Depends)"
-          for expected in \
-            libgtk-3-0 \
-            libwebkit2gtk-4.1-0 \
-            desktop-file-utils \
-            hicolor-icon-theme \
-            gnome-keyring \
-            libsecret-1-0 \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-libav
-          do
-            grep -qw "$expected" <<<"$deps" || {
-              echo "Expected upstream dependency disappeared: $expected" >&2
-              exit 1
-            }
-          done
+          actual_deps="$(dpkg-deb -f seraphirc.deb Depends             | tr ',' '\n'             | sed -E 's/^ +| +$//g; s/ +\([^)]*\)//g'             | sort -u)"
+
+          expected_deps="$(cat <<'EOF' | sort -u
+dbus-user-session
+desktop-file-utils
+gnome-keyring
+gstreamer1.0-libav
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
+hicolor-icon-theme
+libgtk-3-0
+libsecret-1-0
+libsecret-tools
+libwebkit2gtk-4.1-0
+EOF
+)"
+
+          if [[ "$actual_deps" != "$expected_deps" ]]; then
+            echo "Upstream dependency set changed; refusing automatic publish." >&2
+            echo "--- expected"
+            printf '%s\n' "$expected_deps"
+            echo "--- actual"
+            printf '%s\n' "$actual_deps"
+            exit 1
+          fi
 
           echo "UPSTREAM_SHA=$upstream_sha" >> "$GITHUB_ENV"
 
@@ -89,37 +125,82 @@ jobs:
           VERSION: ${{ steps.version.outputs.latest }}
         run: |
           set -euo pipefail
-          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
           sed -i 's/^pkgrel=.*/pkgrel=1/' PKGBUILD
-          sed -i "s/^sha256sums=.*/sha256sums=('${UPSTREAM_SHA}')/" PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('$UPSTREAM_SHA')/" PKGBUILD
 
-          docker run --rm \
-            -v "$PWD:/pkg" \
-            -w /pkg \
-            archlinux:latest \
-            bash -lc "pacman -Sy --noconfirm base-devel >/dev/null && useradd -m builder && chown -R builder:builder /pkg && su builder -c 'makepkg --printsrcinfo > .SRCINFO'"
+          docker run --rm             -v "$PWD:/pkg"             -w /pkg             archlinux:latest             bash -lc "pacman -Sy --noconfirm base-devel >/dev/null && useradd -m builder && chown -R builder:builder /pkg && su builder -c 'makepkg --printsrcinfo > .SRCINFO'"
 
-      - name: Open update pull request
+      - name: Clean-build updated package on Arch
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          builddir="$(mktemp -d)"
+          cp PKGBUILD .SRCINFO "$builddir/"
+
+          docker run --rm             -v "$builddir:/pkg"             -w /pkg             archlinux:latest             bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm
+              pacman -S --needed --noconfirm                 base-devel                 desktop-file-utils                 gnome-keyring                 gst-libav                 gst-plugins-base                 gst-plugins-good                 gtk3                 hicolor-icon-theme                 libsecret                 webkit2gtk-4.1
+              useradd -m builder
+              chown -R builder:builder /pkg
+              su builder -c "makepkg --cleanbuild --noconfirm"
+              pkg="$(find /pkg -maxdepth 1 -name "seraphirc-bin-*.pkg.tar.*" -print -quit)"
+              test -n "$pkg"
+              bsdtar -tf "$pkg" | grep -qx "usr/bin/seraphirc"
+              bsdtar -tf "$pkg" | grep -qx "usr/share/applications/seraphirc.desktop"
+              bsdtar -tf "$pkg" | grep -qx "usr/share/licenses/seraphirc-bin/LICENSE"
+            '
+
+      - name: Configure AUR SSH key
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur
+            User aur
+            IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Publish updated package to AUR
         if: steps.version.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.latest }}
         run: |
           set -euo pipefail
-          branch="automation/seraphirc-${VERSION}"
 
+          git clone ssh://aur@aur.archlinux.org/seraphirc-bin.git aur
+          cp PKGBUILD .SRCINFO aur/
+          cd aur
+
+          git config user.name "haxxordan"
+          git config user.email "haxxordan@users.noreply.github.com"
+
+          if git diff --quiet -- PKGBUILD .SRCINFO; then
+            echo "AUR package is already current."
+          else
+            git add PKGBUILD .SRCINFO
+            git commit -m "seraphirc-bin $VERSION"
+            git push
+          fi
+
+      - name: Commit update to GitHub
+        if: steps.version.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          rm -rf aur seraphirc.deb checksum.txt unpack
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
           git add PKGBUILD .SRCINFO
-          git commit -m "chore: update SeraphIRC to ${VERSION}"
-          git push --force-with-lease origin "$branch"
-
-          existing="$(gh pr list --head "$branch" --json number --jq '.[0].number // empty')"
-          if [[ -z "$existing" ]]; then
-            gh pr create \
-              --base master \
-              --head "$branch" \
-              --title "Update SeraphIRC to ${VERSION}" \
-              --body "Automated upstream release update. The Debian asset checksum, expected file layout, and declared runtime dependencies were verified before this PR was opened."
-          fi
+          git commit -m "chore: update SeraphIRC to $VERSION"
+          git push origin HEAD:master
