@@ -90,13 +90,13 @@ jobs:
 
           dpkg-deb --extract seraphirc.deb unpack
           test -x unpack/usr/bin/seraphirc
-          test -f unpack/usr/share/applications/seraphirc.desktop
+          test -f unpack/usr/share/applications/chat.seraphirc.SeraphIRC.desktop
           test -f unpack/usr/share/doc/seraphirc/LICENSE
           test -f unpack/usr/share/seraphirc/config.default.json
 
           actual_deps="$(dpkg-deb -f seraphirc.deb Depends             | tr ',' '\n'             | sed -E 's/^ +| +$//g; s/ +\([^)]*\)//g'             | sort -u)"
 
-          expected_deps="$(printf '%s\\n' dbus-user-session desktop-file-utils gnome-keyring gstreamer1.0-libav gstreamer1.0-plugins-base gstreamer1.0-plugins-good hicolor-icon-theme libgtk-3-0 libsecret-1-0 libsecret-tools libwebkit2gtk-4.1-0 | sort -u)"
+          expected_deps="$(printf '%s\\n' dbus-user-session desktop-file-utils gnome-keyring gstreamer1.0-libav gstreamer1.0-plugins-base gstreamer1.0-plugins-good hicolor-icon-theme libgtk-4-1 libsecret-1-0 libsecret-tools libwebkitgtk-6.0-4 | sort -u)"
 
           if [[ "$actual_deps" != "$expected_deps" ]]; then
             echo "Upstream dependency set changed; refusing automatic publish." >&2
@@ -133,14 +133,14 @@ jobs:
           docker run --rm             -v "$builddir:/pkg"             -w /pkg             archlinux:latest             bash -lc '
               set -euo pipefail
               pacman -Syu --noconfirm
-              pacman -S --needed --noconfirm                 base-devel                 desktop-file-utils                 gnome-keyring                 gst-libav                 gst-plugins-base                 gst-plugins-good                 gtk3                 hicolor-icon-theme                 libsecret                 webkit2gtk-4.1
+              pacman -S --needed --noconfirm                 base-devel                 desktop-file-utils                 gnome-keyring                 gst-libav                 gst-plugins-base                 gst-plugins-good                 gtk4                 hicolor-icon-theme                 libsecret                 webkitgtk-6.0
               useradd -m builder
               chown -R builder:builder /pkg
               su builder -c "makepkg --cleanbuild --noconfirm"
               pkg="$(find /pkg -maxdepth 1 -name "seraphirc-bin-*.pkg.tar.*" -print -quit)"
               test -n "$pkg"
               bsdtar -tf "$pkg" | grep -qx "usr/bin/seraphirc"
-              bsdtar -tf "$pkg" | grep -qx "usr/share/applications/seraphirc.desktop"
+              bsdtar -tf "$pkg" | grep -qx "usr/share/applications/chat.seraphirc.SeraphIRC.desktop"
               bsdtar -tf "$pkg" | grep -qx "usr/share/licenses/seraphirc-bin/LICENSE"
             '
 

@@ -31,10 +31,10 @@ makepkg -si
 
 ## Upstream binary dependencies
 
-SeraphIRC 6.0.1 declares Debian dependencies corresponding to the following Arch packages:
+SeraphIRC 6.0.3 declares Debian dependencies corresponding to the following Arch packages:
 
-- `gtk3`
-- `webkit2gtk-4.1`
+- `gtk4`
+- `webkitgtk-6.0`
 - `libsecret`
 - `gnome-keyring`
 - `desktop-file-utils`

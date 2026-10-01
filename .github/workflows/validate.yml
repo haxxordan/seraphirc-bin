@@ -32,10 +32,10 @@ jobs:
             gst-libav \
             gst-plugins-base \
             gst-plugins-good \
-            gtk3 \
+            gtk4 \
             hicolor-icon-theme \
             libsecret \
-            webkit2gtk-4.1
+            webkitgtk-6.0
 
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,5 +56,5 @@ jobs:
           pkg="$(find . -maxdepth 1 -name 'seraphirc-bin-*.pkg.tar.*' -print -quit)"
           test -n "$pkg"
           bsdtar -tf "$pkg" | grep -qx 'usr/bin/seraphirc'
-          bsdtar -tf "$pkg" | grep -qx 'usr/share/applications/seraphirc.desktop'
+          bsdtar -tf "$pkg" | grep -qx 'usr/share/applications/chat.seraphirc.SeraphIRC.desktop'
           bsdtar -tf "$pkg" | grep -qx 'usr/share/licenses/seraphirc-bin/LICENSE'
