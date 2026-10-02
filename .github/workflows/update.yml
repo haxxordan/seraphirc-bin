@@ -120,7 +120,7 @@ jobs:
           sed -i 's/^pkgrel=.*/pkgrel=1/' PKGBUILD
           sed -i "s/^sha256sums=.*/sha256sums=('$UPSTREAM_SHA')/" PKGBUILD
 
-          docker run --rm             -v "$PWD:/pkg:ro"             -w /pkg             archlinux:latest             bash -lc "pacman -Sy --noconfirm base-devel >/dev/null && useradd -m builder && su builder -c 'makepkg --printsrcinfo'" > .SRCINFO
+          docker run --rm             -v "$PWD:/pkg:ro"             archlinux:latest             bash -lc "pacman -Sy --noconfirm base-devel >/dev/null && useradd -m builder && install -d -o builder -g builder /build && install -m 644 -o builder -g builder /pkg/PKGBUILD /build/PKGBUILD && cd /build && su builder -c 'makepkg --printsrcinfo'" > .SRCINFO
 
       - name: Clean-build updated package on Arch
         if: steps.version.outputs.changed == 'true'
